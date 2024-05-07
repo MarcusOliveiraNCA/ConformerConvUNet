@@ -17,12 +17,14 @@ from tensorflow.keras import layers
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Activation, UpSampling2D,ReLU,LeakyReLU,Add,GlobalAveragePooling2D,AveragePooling2D
 from tensorflow.keras.layers import BatchNormalization, Conv2DTranspose, Concatenate
 from tensorflow.keras.models import Model, Sequential
+from keras.utils import plot_model
+from tensorflow.keras.layers import Flatten, Reshape
 
 #from keras_flops import get_flops
 
 
 import os
-os.environ["PATH"] += os.pathsep + 'C:\\Program Files\\Graphviz\\bin\\'
+#os.environ["PATH"] += os.pathsep + 'C:\\Program Files\\Graphviz\\bin\\'
 
 
 
@@ -30,25 +32,53 @@ os.environ["PATH"] += os.pathsep + 'C:\\Program Files\\Graphviz\\bin\\'
 ############### UNet Architecture ######################
 ########################################################
 
-def convolution_block(block_input, num_filters=256, kernel_size=3, dilation_rate=1, padding="same", use_bias=False,):
+def convolution_block(block_input, num_filters=48, kernel_size=3, dilation_rate=1, padding="same", use_bias=False, pool_size=(2, 2)):
     x = layers.Conv2D(num_filters,
         kernel_size=kernel_size,
         dilation_rate=dilation_rate,
         padding="same",
         use_bias=use_bias,
         kernel_initializer=keras.initializers.HeNormal(),
+        activation='relu'
     )(block_input)
     x = layers.BatchNormalization()(x)
-    return tf.nn.relu(x)
+    return x
 
-def CONFORMER_CONV_UNET(image_size, num_classes,activation):
+def merge_PPM_2_x_2(entered_input, filters=48):
+    out_3 = conformerConvModuleParaPPM(entered_input, filters, 3)
+    out_11 = conformerConvModuleParaPPM(entered_input, filters, 11)
+
+    merged = layers.concatenate([ out_3, out_11], axis=-1)
+
+    enc1 = convolution_block(merged, filters) 
+
+    enc2 = layers.BatchNormalization()(enc1)
+    relu = layers.ReLU()(enc2)
+    next_layer = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(relu)   
+    skip_connection = relu
+
+    return skip_connection, next_layer
+
+def convolution(entered_input, filters=48):
+    out_3 = conformerConvModuleParaPPM(entered_input, filters, 3)
+
+    enc1 = convolution_block(out_3, filters) 
+
+    enc2 = layers.BatchNormalization()(enc1)
+    relu = layers.ReLU()(enc2)
+    next_layer = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(relu)   
+    skip_connection = relu
+
+    return skip_connection, next_layer
+
+
+def CONFORMER_CONV_UNET_PPM(image_size, num_classes,activation):
     
     model_input = keras.Input(shape=(image_size, image_size, 3))
     
     ##################### UNet Encoder Call ####################
     skip_list = []
     skip_list, x = UNet_Enconder(model_input)   
-    
     
     ########## Decoder Block UNet Shape ###########
     n_filtro = 48
@@ -79,12 +109,10 @@ def CONFORMER_CONV_UNET(image_size, num_classes,activation):
     model_output = layers.Conv2D(num_classes, kernel_size=(1, 1), padding="same",activation=activation)(out_lvl1)
     return keras.Model(inputs=model_input, outputs=model_output)
 
-
-
 ################################################################
 ############### UNET Architecture Encoder ######################
 ################################################################
-def bottleneck_block(entered_input, filters=64):
+def bottleneck_block(entered_input, filters=48):
     # Taking first input and implementing the first conv block
     conv1 = Conv2D(filters, kernel_size = (3,3), padding = "same")(entered_input)
     batch_norm1 = BatchNormalization()(conv1)
@@ -97,42 +125,21 @@ def bottleneck_block(entered_input, filters=64):
     
     return act2
 
-# def UNet_Block(entered_input,filters=64):
-#     kernel = (3,3)
-#     conv = Conv2D(filters, 
-#                   kernel_size = kernel,  # filter size
-#                   activation='relu',
-#                   padding='same',
-#                   kernel_initializer='HeNormal')(entered_input)
-#     conv = Conv2D(filters, 
-#                   kernel_size = kernel,  # filter size
-#                   activation='relu',
-#                   padding='same',
-#                   kernel_initializer='HeNormal')(conv)
-  
-#     conv = BatchNormalization()(conv, training=False)
-#     next_layer = tf.keras.layers.MaxPooling2D(pool_size = (2,2))(conv)   
-#     skip_connection = conv 
-
-#     return skip_connection,next_layer
-
-
 def UNet_Enconder(input):
     # Take the image size and shape
     input1 = input
     n_filtro = 48
 
     # Construct the encoder blocks 
-    skip1, encoder_1 = conformerConvModule(input1, n_filtro)
-    skip2, encoder_2 = conformerConvModule(encoder_1,  n_filtro*2)
-    skip3, encoder_3 = conformerConvModule(encoder_2, n_filtro*4)
-    skip4, encoder_4 = conformerConvModule(encoder_3, n_filtro*8)
-        
+    skip1, encoder_1 = merge_PPM_2_x_2(input1, n_filtro)
+    skip2, encoder_2 = convolution(encoder_1,n_filtro*2)
+    skip3, encoder_3 = merge_PPM_2_x_2(encoder_2, n_filtro*4)
+    skip4, encoder_4 =  convolution(encoder_3,n_filtro*8)
+
     # Preparing the next block
     conv_block = bottleneck_block(encoder_4,  n_filtro*16)
     
     return [skip1,skip2,skip3,skip4],conv_block
-
 
 ########################################################
 ############### Conformer Conv Architecture ############
@@ -162,7 +169,7 @@ class Swish(tf.keras.layers.Layer):
         super(Swish, self).__init__(**kwargs)
 
     def call(self, inputs):
-        return inputs * tf.sigmoid(inputs)
+        return inputs * tf.sigmoid(inputs)  
 #DepthwiseLayer
 class DepthwiseLayer(tf.keras.layers.Layer):
     def __init__(self, chan_in, chan_out, kernel_size, padding, **kwargs):
@@ -180,9 +187,8 @@ class DepthwiseLayer(tf.keras.layers.Layer):
         inputs = tf.reshape(inputs, [-1, self.chan_in, self.chan_in])
 
         return self.conv(inputs)
-
 #Conformer Conv Module Architecture
-def conformerConvModule(model_input,filters=64, kernel_size=3):
+def conformerConvModuleParaPPM(model_input,filters=48, kernel_size=3):
     dim = filters
     # Create skip connection Residual
     x_skip_res = model_input
@@ -192,15 +198,22 @@ def conformerConvModule(model_input,filters=64, kernel_size=3):
     dropout=0.0
 
     ln = tf.keras.layers.LayerNormalization(axis=-1)(model_input)
-    pointConv = tf.keras.layers.Conv1D(filters=inner_dim * 2, kernel_size=1)(ln)
+    #pointConv = tf.keras.layers.Conv1D(filters=inner_dim * 2, kernel_size=1)(ln)
+    pointConv = tf.keras.layers.Conv2D(filters=inner_dim * 2, kernel_size=(1, 1))(ln)
     act_glu = GatedLinearUnit(units=inner_dim * 2)(pointConv)
-    convDeth = tf.keras.layers.Conv1D(filters=inner_dim,                         # 1D Depthwise Conv
-                                   kernel_size=kernel_size,
-                                   padding='same',
-                                   groups=inner_dim)(act_glu)
+    # convDeth = tf.keras.layers.Conv1D(filters=inner_dim,                         # 1D Depthwise Conv
+    #                                kernel_size=kernel_size,
+    #                                padding='same',
+    #                                groups=inner_dim)(act_glu)
+    convDeth = tf.keras.layers.Conv2D(filters=inner_dim,            # Conv2D Depthwise Conv
+                                  kernel_size=(kernel_size, kernel_size), # Aqui ajustamos o kernel_size
+                                  padding='same')(act_glu)
+
     batch_norm1 = BatchNormalization()(convDeth)
     act_swish = Swish()(batch_norm1)
-    conv1 = tf.keras.layers.Conv1D(filters=dim, kernel_size=1)(act_swish)
+    #conv1 = tf.keras.layers.Conv1D(filters=dim, kernel_size=1)(act_swish)
+    conv1 = tf.keras.layers.Conv2D(filters=dim, kernel_size=(1, 1))(act_swish)
+
     drop = tf.keras.layers.Dropout(dropout)(conv1)
    
     #merged = keras.layers.concatenate([model_input,drop], axis=-1)
@@ -208,9 +221,9 @@ def conformerConvModule(model_input,filters=64, kernel_size=3):
     add_out = Add()([x_skip_res,drop])
 
     #Adapted for Unet Encoder
-    next_layer = tf.keras.layers.MaxPooling2D(pool_size = (2,2))(add_out)   
-    skip_connection = add_out 
-    return skip_connection,next_layer
+    # next_layer = tf.keras.layers.MaxPooling2D(pool_size = (2,2))(add_out)   
+    # skip_connection = add_out 
+    return add_out
 
 def mytest():
     ########################################################
@@ -220,13 +233,13 @@ def mytest():
     IMAGE_SIZE = 256
     
     
-    model = CONFORMER_CONV_UNET(image_size=IMAGE_SIZE, num_classes=NUM_CLASSES, activation="softmax")
+    model = CONFORMER_CONV_UNET_PPM(image_size=IMAGE_SIZE, num_classes=NUM_CLASSES, activation="softmax")
     model.summary()
-    patha="G:\\Meu Drive\\!Doutorado_UFMA-UFPI\\!Codes\\PPM\\Revista\\Revista\\Customizando_Bloco_PPM\\1 - Conformer Conv_UNet copy\\"
-    plot_model(model, to_file= patha + "model_plot_UNet_ConformerConv2.png", show_shapes=True, show_layer_names=True)
-    
-    
-    model.save(patha+"keras_model.h5")
+    #tf.keras.utils.plot_model(model, "model.png", show_shapes=False, show_dtype=False, show_layer_names=True, rankdir='TB', expand_nested=False, dpi=96)
+    #patha="G:\\Meu Drive\\!Doutorado_UFMA-UFPI\\!Codes\\PPM\\Revista\\Revista\\Customizando_Bloco_PPM\\1 - Conformer Conv_UNet copy\\"
+    plot_model(model, to_file= "model_plot_UNet_ConformerConv2.png", show_shapes=True, show_layer_names=True)
+
+    model.save("PPM_model_Teste.h5")
 
 if __name__ == '__main__':
     mytest()
