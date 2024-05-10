@@ -250,7 +250,7 @@ def mytest():
     #patha="G:\\Meu Drive\\!Doutorado_UFMA-UFPI\\!Codes\\PPM\\Revista\\Revista\\Customizando_Bloco_PPM\\1 - Conformer Conv_UNet copy\\"
     plot_model(model, to_file= "model_plot_UNet_ConformerConv2.png", show_shapes=True, show_layer_names=True)
 
-    model.save("PPM_model_Teste.h5")
+    model.save("Conformer_Conv_UNet_PPM_4_Camadas.h5")
 
 if __name__ == '__main__':
     mytest()

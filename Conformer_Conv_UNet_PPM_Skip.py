@@ -44,11 +44,13 @@ def convolution_block(block_input, num_filters=48, kernel_size=3, dilation_rate=
     x = layers.BatchNormalization()(x)
     return x
 
-def merge_PPM_2_x_2(entered_input, filters=48):
-    out_3 = conformerConvModuleParaPPM(entered_input, filters, 3)
-    out_11 = conformerConvModuleParaPPM(entered_input, filters, 11)
+def merge_PPM(entered_input, filters=48):
+   #out_1 = convolution_block(entered_input, filters, 1)
+    out_3 = convolution_block(entered_input, filters, 3)
+    out_7 = convolution_block(entered_input, filters, 7)
+    #out_11 = convolution_block(entered_input, filters, 11)
 
-    merged = layers.concatenate([ out_3, out_11], axis=-1)
+    merged = layers.concatenate([ out_3, out_7], axis=-1)
 
     enc1 = convolution_block(merged, filters) 
 
@@ -57,12 +59,14 @@ def merge_PPM_2_x_2(entered_input, filters=48):
     next_layer = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(relu)   
     skip_connection = relu
 
-    return skip_connection, next_layer
+    conformer_skip = conformerConvModuleParaPPM(skip_connection, filters, 3)
+
+    return conformer_skip, next_layer
 
 def convolution(entered_input, filters=48):
-    out_3 = conformerConvModuleParaPPM(entered_input, filters, 3)
+    #out_3 = conformerConvModuleParaPPM(entered_input, filters, 3)
 
-    enc1 = convolution_block(out_3, filters) 
+    enc1 = convolution_block(entered_input, filters) 
 
     enc2 = layers.BatchNormalization()(enc1)
     relu = layers.ReLU()(enc2)
@@ -131,10 +135,10 @@ def UNet_Enconder(input):
     n_filtro = 48
 
     # Construct the encoder blocks 
-    skip1, encoder_1 = merge_PPM_2_x_2(input1, n_filtro)
-    skip2, encoder_2 = convolution(encoder_1,n_filtro*2)
-    skip3, encoder_3 = merge_PPM_2_x_2(encoder_2, n_filtro*4)
-    skip4, encoder_4 =  convolution(encoder_3,n_filtro*8)
+    skip1, encoder_1 = merge_PPM(input1, n_filtro)
+    skip2, encoder_2 = merge_PPM(encoder_1,n_filtro*2)
+    skip3, encoder_3 = merge_PPM(encoder_2, n_filtro*4)
+    skip4, encoder_4 =  merge_PPM(encoder_3,n_filtro*8)
 
     # Preparing the next block
     conv_block = bottleneck_block(encoder_4,  n_filtro*16)
@@ -239,7 +243,7 @@ def mytest():
     #patha="G:\\Meu Drive\\!Doutorado_UFMA-UFPI\\!Codes\\PPM\\Revista\\Revista\\Customizando_Bloco_PPM\\1 - Conformer Conv_UNet copy\\"
     plot_model(model, to_file= "model_plot_UNet_ConformerConv2.png", show_shapes=True, show_layer_names=True)
 
-    model.save("Conformer_Conv_UNet_PPM_2_Camadas.h5")
+    model.save("Conformer_Conv_UNet_PPM_Skip.h5")
 
 if __name__ == '__main__':
     mytest()
